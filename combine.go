@@ -8,7 +8,6 @@ package xc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"time"
 )
@@ -89,7 +88,6 @@ func Join(multi ...context.Context) (context.Context, context.CancelFunc) {
 		close(startC)
 
 		chosen, _, _ := reflect.Select(cases)
-		fmt.Println(chosen)
 		switch chosen {
 		default:
 			cancel()
