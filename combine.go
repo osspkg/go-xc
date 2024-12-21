@@ -6,12 +6,76 @@
 package xc
 
 import (
-	cc "context"
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
+	"time"
 )
 
-func Join(multi ...cc.Context) (cc.Context, cc.CancelFunc) {
-	ctx, cancel := cc.WithCancel(cc.Background())
+type joinedCtx struct {
+	main  context.Context
+	multi []context.Context
+}
+
+func (j joinedCtx) Deadline() (deadline time.Time, has bool) {
+	for _, ctx := range j.multi {
+		dl, ok := ctx.Deadline()
+		if !ok {
+			continue
+		}
+
+		if !has {
+			deadline, has = dl, true
+			continue
+		}
+
+		if dl.Before(deadline) {
+			deadline = dl
+		}
+	}
+
+	return deadline, has
+}
+
+func (j joinedCtx) Done() <-chan struct{} {
+	return j.main.Done()
+}
+
+func (j joinedCtx) Err() (err error) {
+	for _, ctx := range j.multi {
+		err = errors.Join(err, ctx.Err())
+	}
+	return
+}
+
+func (j joinedCtx) Value(key any) any {
+	for _, ctx := range j.multi {
+		if value := ctx.Value(key); value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func (joinedCtx) String() string {
+	return "xc.Join"
+}
+
+func Join(multi ...context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if len(multi) == 0 {
+		return ctx, cancel
+	}
+
+	multi = append(multi, ctx)
+
+	jCtx := joinedCtx{
+		main:  ctx,
+		multi: multi,
+	}
+
+	startC := make(chan struct{}, 1)
 
 	go func() {
 		cases := make([]reflect.SelectCase, 0, len(multi))
@@ -21,12 +85,18 @@ func Join(multi ...cc.Context) (cc.Context, cc.CancelFunc) {
 				Chan: reflect.ValueOf(vv.Done()),
 			})
 		}
+
+		close(startC)
+
 		chosen, _, _ := reflect.Select(cases)
+		fmt.Println(chosen)
 		switch chosen {
 		default:
 			cancel()
 		}
 	}()
 
-	return ctx, cancel
+	<-startC
+
+	return jCtx, cancel
 }
